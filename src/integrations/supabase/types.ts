@@ -14,6 +14,83 @@ export type Database = {
   }
   public: {
     Tables: {
+      album_share_photos: {
+        Row: {
+          photo_id: string
+          share_id: string
+        }
+        Insert: {
+          photo_id: string
+          share_id: string
+        }
+        Update: {
+          photo_id?: string
+          share_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "album_share_photos_photo_id_fkey"
+            columns: ["photo_id"]
+            isOneToOne: false
+            referencedRelation: "photos"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "album_share_photos_share_id_fkey"
+            columns: ["share_id"]
+            isOneToOne: false
+            referencedRelation: "album_shares"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      album_shares: {
+        Row: {
+          album_id: string
+          allow_download: boolean
+          created_at: string
+          created_by: string
+          expires_at: string | null
+          id: string
+          mode: string
+          revoked_at: string | null
+          revoked_by: string | null
+          token: string
+        }
+        Insert: {
+          album_id: string
+          allow_download?: boolean
+          created_at?: string
+          created_by: string
+          expires_at?: string | null
+          id?: string
+          mode: string
+          revoked_at?: string | null
+          revoked_by?: string | null
+          token: string
+        }
+        Update: {
+          album_id?: string
+          allow_download?: boolean
+          created_at?: string
+          created_by?: string
+          expires_at?: string | null
+          id?: string
+          mode?: string
+          revoked_at?: string | null
+          revoked_by?: string | null
+          token?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "album_shares_album_id_fkey"
+            columns: ["album_id"]
+            isOneToOne: false
+            referencedRelation: "albums"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       albums: {
         Row: {
           client_id: string
@@ -53,6 +130,7 @@ export type Database = {
           created_at: string | null
           height: number | null
           id: string
+          original_filename: string | null
           sort_order: number | null
           preview_url: string | null
           thumbnail_url: string | null
@@ -64,6 +142,7 @@ export type Database = {
           created_at?: string | null
           height?: number | null
           id?: string
+          original_filename?: string | null
           sort_order?: number | null
           preview_url?: string | null
           thumbnail_url?: string | null
@@ -75,6 +154,7 @@ export type Database = {
           created_at?: string | null
           height?: number | null
           id?: string
+          original_filename?: string | null
           sort_order?: number | null
           preview_url?: string | null
           thumbnail_url?: string | null
@@ -82,6 +162,45 @@ export type Database = {
           width?: number | null
         }
         Relationships: []
+      }
+      photo_favorites: {
+        Row: {
+          album_id: string
+          created_at: string
+          id: string
+          photo_id: string
+          user_id: string
+        }
+        Insert: {
+          album_id: string
+          created_at?: string
+          id?: string
+          photo_id: string
+          user_id: string
+        }
+        Update: {
+          album_id?: string
+          created_at?: string
+          id?: string
+          photo_id?: string
+          user_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "photo_favorites_album_id_fkey"
+            columns: ["album_id"]
+            isOneToOne: false
+            referencedRelation: "albums"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "photo_favorites_photo_id_fkey"
+            columns: ["photo_id"]
+            isOneToOne: false
+            referencedRelation: "photos"
+            referencedColumns: ["id"]
+          },
+        ]
       }
       photos: {
         Row: {
@@ -296,6 +415,22 @@ export type Database = {
       [_ in never]: never
     }
     Functions: {
+      create_album_share: {
+        Args: {
+          p_album_id: string
+          p_allow_download?: boolean
+          p_expires_in_days?: number | null
+          p_mode: string
+          p_photo_ids?: string[] | null
+        }
+        Returns: {
+          expires_at: string | null
+          id: string
+          photo_count: number
+          token: string
+        }[]
+      }
+      get_shared_album: { Args: { p_token: string }; Returns: Json }
       get_email_by_username: { Args: { _username: string }; Returns: string }
       has_role: {
         Args: {
