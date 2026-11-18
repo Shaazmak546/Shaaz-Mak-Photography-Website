@@ -9,6 +9,9 @@ import { supabase } from "@/integrations/supabase/client";
 import { useAuth } from "@/hooks/useAuth";
 import { Eye, EyeOff, User, Lock } from "lucide-react";
 
+const SERVICE_ERROR =
+  "We're having trouble connecting right now. Your login is fine — please try again in a few minutes.";
+
 export default function Login() {
   const navigate = useNavigate();
   const { toast } = useToast();
@@ -56,8 +59,10 @@ export default function Login() {
           raw.charAt(0).toUpperCase() + raw.slice(1).toLowerCase(),
         ]));
         for (const candidate of variations) {
-          const { data } = await supabase
+          const { data, error: lookupError } = await supabase
             .rpc('get_email_by_username', { _username: candidate });
+          // A failed lookup (site/database down) is not a wrong username.
+          if (lookupError) throw new Error(SERVICE_ERROR);
           if (data) { email = data; break; }
         }
       }
@@ -71,7 +76,12 @@ export default function Login() {
         password: formData.password,
       });
 
-      if (error) throw new Error("Invalid username or password");
+      if (error) {
+        const status = (error as { status?: number }).status;
+        const isServiceProblem =
+          !status || status === 402 || status === 429 || status >= 500;
+        throw new Error(isServiceProblem ? SERVICE_ERROR : "Invalid username or password");
+      }
 
       toast({
         title: "Welcome Back!",
@@ -80,7 +90,10 @@ export default function Login() {
     } catch (error: any) {
       toast({
         title: "Error",
-        description: error.message || "Something went wrong. Please try again.",
+        description:
+          error instanceof TypeError // network failure (e.g. "Failed to fetch")
+            ? SERVICE_ERROR
+            : error.message || "Something went wrong. Please try again.",
         variant: "destructive",
       });
     } finally {
