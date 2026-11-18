@@ -113,14 +113,18 @@ export function AlbumManager({ onChange }: AlbumManagerProps = {}) {
       if (albumsError) throw albumsError;
 
       // Get photo counts
-      const { data: photos } = await supabase
-        .from('photos')
-        .select('album_id');
-
+      // Count per album with head-only count queries (a single select of all
+      // photos is capped at 1000 rows by the API, which undercounted albums).
       const photoCounts: Record<string, number> = {};
-      photos?.forEach(photo => {
-        photoCounts[photo.album_id] = (photoCounts[photo.album_id] || 0) + 1;
-      });
+      await Promise.all(
+        (albumsData || []).map(async (album) => {
+          const { count } = await supabase
+            .from('photos')
+            .select('id', { count: 'exact', head: true })
+            .eq('album_id', album.id);
+          photoCounts[album.id] = count ?? 0;
+        })
+      );
 
       // Get client names
       const clientIds = [...new Set(albumsData?.map(a => a.client_id) || [])];
