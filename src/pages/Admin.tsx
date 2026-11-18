@@ -3,9 +3,29 @@ import { useNavigate } from "react-router-dom";
 import { Users, ImageIcon, LogOut, Camera, Home, RefreshCw, FolderOpen } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import { useAuth } from "@/hooks/useAuth";
 import { useToast } from "@/hooks/use-toast";
 import { supabase } from "@/integrations/supabase/client";
+import {
+  formatReprocessSummary,
+  reprocessMissingVariants,
+  type ReprocessProgress,
+} from "@/lib/reprocessVariants";
 import { Clients } from "./admin/Clients";
 import { AlbumManager } from "./admin/AlbumManager";
 import { PortfolioManager } from "./admin/PortfolioManager";
@@ -17,12 +37,21 @@ interface AdminStats {
   photos: number;
 }
 
+interface AlbumOption {
+  id: string;
+  title: string;
+}
+
 export default function Admin() {
   const { user, isAdmin, isLoading, signOut } = useAuth();
   const navigate = useNavigate();
   const { toast } = useToast();
   const [stats, setStats] = useState<AdminStats | null>(null);
   const [isReprocessing, setIsReprocessing] = useState(false);
+  const [reprocessProgress, setReprocessProgress] = useState<ReprocessProgress | null>(null);
+  const [reprocessDialogOpen, setReprocessDialogOpen] = useState(false);
+  const [reprocessScope, setReprocessScope] = useState<string>("all");
+  const [albumOptions, setAlbumOptions] = useState<AlbumOption[]>([]);
   const [myUsername, setMyUsername] = useState<string | null>(null);
 
   useEffect(() => {
@@ -47,8 +76,20 @@ export default function Admin() {
     }
   }, [user, isAdmin]);
 
+  // Warn if the tab is closed mid-run — leaving would abandon in-progress photos.
+  useEffect(() => {
+    if (!isReprocessing) return;
+    const onLeave = (e: BeforeUnloadEvent) => {
+      e.preventDefault();
+      e.returnValue = "";
+    };
+    window.addEventListener("beforeunload", onLeave);
+    return () => window.removeEventListener("beforeunload", onLeave);
+  }, [isReprocessing]);
+
   const loadStats = async () => {
-    // RPC may not be in generated types yet — cast to any
+    // RPC may not be in generated types yet.
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const { data, error } = await (supabase.rpc as any)("get_admin_stats");
     if (error) {
       console.error("Failed to load admin stats:", error);
@@ -62,37 +103,56 @@ export default function Admin() {
     navigate("/");
   };
 
-  // Trigger backfill-variants edge function and report progress
-  const handleReprocess = async () => {
-    setIsReprocessing(true);
-    try {
-      const { data, error } = await supabase.functions.invoke("backfill-variants", {
-        body: {},
-      });
-      if (error) throw error;
+  const openReprocessDialog = async () => {
+    setReprocessScope("all");
+    setReprocessDialogOpen(true);
+    const { data, error } = await supabase
+      .from("albums")
+      .select("id, title")
+      .order("created_at", { ascending: false });
+    if (error) {
+      console.warn("Could not load albums for reprocess filter:", error.message);
+      return;
+    }
+    setAlbumOptions((data ?? []) as AlbumOption[]);
+  };
 
-      const summary = ["photos", "portfolio_photos", "homepage_photos"]
-        .map((t) => {
-          const r = data?.[t];
-          return r ? `${t}: ${r.processed}/${r.processed + r.remaining}` : null;
-        })
-        .filter(Boolean)
-        .join(" · ");
+  // Build thumb/preview in this browser for rows still missing variants.
+  // The old backfill-variants Edge Function runs out of memory on large JPEGs.
+  const handleReprocess = async () => {
+    setReprocessDialogOpen(false);
+    setIsReprocessing(true);
+    setReprocessProgress({ completed: 0, total: 0, succeeded: 0, failed: 0 });
+    try {
+      const result = await reprocessMissingVariants({
+        albumId: reprocessScope === "all" ? undefined : reprocessScope,
+        onProgress: setReprocessProgress,
+      });
 
       toast({
-        title: "Reprocessing complete",
-        description: summary || "All images already have variants.",
+        title: result.failed > 0 ? "Reprocessing finished with errors" : "Reprocessing complete",
+        description: formatReprocessSummary(result),
+        variant: result.failed > 0 ? "destructive" : undefined,
       });
-    } catch (err: any) {
+    } catch (err: unknown) {
       toast({
         title: "Reprocess failed",
-        description: err?.message || "Could not run image reprocessing.",
+        description: err instanceof Error ? err.message : "Could not run image reprocessing.",
         variant: "destructive",
       });
     } finally {
       setIsReprocessing(false);
+      setReprocessProgress(null);
     }
   };
+
+  const reprocessButtonLabel = (() => {
+    if (!isReprocessing) return "Reprocess images";
+    if (reprocessProgress && reprocessProgress.total > 0) {
+      return `Reprocessing ${reprocessProgress.completed} of ${reprocessProgress.total}`;
+    }
+    return "Looking up photos...";
+  })();
 
   if (isLoading) {
     return (
@@ -129,17 +189,18 @@ export default function Admin() {
           <div className="flex items-center gap-2">
             <Button
               variant="outline"
-              onClick={handleReprocess}
+              onClick={openReprocessDialog}
               disabled={isReprocessing}
               className="border-border/50"
-              title="Generate WebP variants for any photos that don't have them yet"
+              title="Generate WebP thumbnails in this browser for photos that don't have them yet"
             >
               <RefreshCw className={`w-4 h-4 mr-2 ${isReprocessing ? "animate-spin" : ""}`} />
-              {isReprocessing ? "Reprocessing..." : "Reprocess images"}
+              {reprocessButtonLabel}
             </Button>
             <Button
               variant="outline"
               onClick={handleSignOut}
+              disabled={isReprocessing}
               className="border-border/50"
             >
               <LogOut className="w-4 h-4 mr-2" />
@@ -148,6 +209,41 @@ export default function Admin() {
           </div>
         </div>
       </header>
+
+      <Dialog open={reprocessDialogOpen} onOpenChange={setReprocessDialogOpen}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Reprocess images</DialogTitle>
+            <DialogDescription>
+              Creates thumbnails and previews in this browser for photos that
+              don&apos;t have them yet. Keep this tab open until it finishes.
+              Photos that already have thumbnails are skipped.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-2">
+            <p className="text-sm font-medium">Which photos?</p>
+            <Select value={reprocessScope} onValueChange={setReprocessScope}>
+              <SelectTrigger>
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="all">All photos (albums, portfolio, and homepage)</SelectItem>
+                {albumOptions.map((album) => (
+                  <SelectItem key={album.id} value={album.id}>
+                    {album.title || "Untitled album"}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setReprocessDialogOpen(false)}>
+              Cancel
+            </Button>
+            <Button onClick={handleReprocess}>Start</Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
       {/* Main Content */}
       <main className="container mx-auto px-6 py-8">
