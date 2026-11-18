@@ -54,6 +54,7 @@ export type Database = {
           height: number | null
           id: string
           sort_order: number | null
+          preview_url: string | null
           thumbnail_url: string | null
           url: string
           width: number | null
@@ -64,6 +65,7 @@ export type Database = {
           height?: number | null
           id?: string
           sort_order?: number | null
+          preview_url?: string | null
           thumbnail_url?: string | null
           url: string
           width?: number | null
@@ -74,6 +76,7 @@ export type Database = {
           height?: number | null
           id?: string
           sort_order?: number | null
+          preview_url?: string | null
           thumbnail_url?: string | null
           url?: string
           width?: number | null
@@ -87,6 +90,7 @@ export type Database = {
           height: number | null
           id: string
           sort_order: number | null
+          preview_url: string | null
           thumbnail_url: string | null
           title: string | null
           url: string
@@ -98,6 +102,7 @@ export type Database = {
           height?: number | null
           id?: string
           sort_order?: number | null
+          preview_url?: string | null
           thumbnail_url?: string | null
           title?: string | null
           url: string
@@ -109,6 +114,7 @@ export type Database = {
           height?: number | null
           id?: string
           sort_order?: number | null
+          preview_url?: string | null
           thumbnail_url?: string | null
           title?: string | null
           url?: string
@@ -132,6 +138,7 @@ export type Database = {
           height: number | null
           id: string
           sort_order: number | null
+          preview_url: string | null
           thumbnail_url: string | null
           url: string
           width: number | null
@@ -143,6 +150,7 @@ export type Database = {
           height?: number | null
           id?: string
           sort_order?: number | null
+          preview_url?: string | null
           thumbnail_url?: string | null
           url: string
           width?: number | null
@@ -154,6 +162,7 @@ export type Database = {
           height?: number | null
           id?: string
           sort_order?: number | null
+          preview_url?: string | null
           thumbnail_url?: string | null
           url?: string
           width?: number | null

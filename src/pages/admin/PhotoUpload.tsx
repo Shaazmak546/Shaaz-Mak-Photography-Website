@@ -89,21 +89,19 @@ export function PhotoUpload() {
     try {
       let missingVariants = 0;
       for (const file of Array.from(files)) {
-        // New pipeline: upload original + generate WebP variants via Edge Function.
+        // Upload original + generate WebP thumb/preview in the browser.
         const processed = await uploadAndProcessPhoto(file, albumId);
         if (!processed.variantsReady) missingVariants++;
 
-        // NOTE: preview_url is omitted because the column migration hasn't
-        // been applied to the live DB yet. Once
-        // 20260408000000_add_image_variants is applied, add preview_url back.
-        // thumbnail_url is null when process-upload is down — grids show a
-        // placeholder instead of silently loading the full-res original.
+        // thumbnail_url / preview_url are null only if no variants could be
+        // made — grids then show a placeholder instead of loading full-res.
         const { error: insertError } = await supabase
           .from('photos')
           .insert({
             album_id: albumId,
             url: processed.url,
             thumbnail_url: processed.thumbnail_url,
+            preview_url: processed.preview_url,
             sort_order: photos.length + uploadedCount,
             width: processed.width,
             height: processed.height,
@@ -120,7 +118,7 @@ export function PhotoUpload() {
           title: "Upload complete — thumbnails pending",
           description:
             `${uploadedCount} photo(s) saved, but ${missingVariants} are missing WebP variants. ` +
-            "Deploy the process-upload function, then use Admin → Reprocess images.",
+            "Use Admin → Reprocess images for those photos (or re-upload them as JPEG).",
           variant: "destructive",
         });
       } else {

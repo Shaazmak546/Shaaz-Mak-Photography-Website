@@ -162,11 +162,10 @@ export function PortfolioManager() {
   const addMutation = useMutation({
     mutationFn: async ({ uploads, alt }: { uploads: PendingUpload[]; alt: string }) => {
       const maxOrder = photos.length > 0 ? Math.max(...photos.map((p) => p.sort_order)) + 1 : 0;
-      // preview_url omitted — column not in live DB schema yet. See
-      // add_image_variants migration; frontend falls back to url meanwhile.
       const inserts = uploads.map((u, index) => ({
         url: u.url,
         thumbnail_url: u.thumbnail_url,
+        preview_url: u.preview_url,
         width: u.width,
         height: u.height,
         category: u.category,
@@ -352,7 +351,7 @@ export function PortfolioManager() {
       const missing = uploaded.filter((u) => !u.variantsReady).length;
       if (missing > 0) {
         toast.error(
-          `${uploaded.length} uploaded (pick categories), but ${missing} missing WebP variants. Deploy process-upload, then Admin → Reprocess images.`
+          `${uploaded.length} uploaded (pick categories), but ${missing} missing WebP variants. Use Admin → Reprocess images for those.`
         );
       } else {
         toast.success(`${uploaded.length} image(s) uploaded — now pick a category for each`);
