@@ -1,6 +1,6 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useCallback, useMemo } from "react";
 import { useParams, Link } from "react-router-dom";
-import { ArrowLeft, Upload, Trash2, Star, GripVertical } from "lucide-react";
+import { ArrowLeft, Upload, Trash2, Star, GripVertical, Heart } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { useToast } from "@/hooks/use-toast";
 import { supabase } from "@/integrations/supabase/client";
@@ -8,12 +8,18 @@ import { RowsPhotoAlbum, RenderImageContext, RenderImageProps } from "react-phot
 import "react-photo-album/rows.css";
 import { uploadAndProcessPhoto } from "@/lib/uploadPhoto";
 import { cdn, srcset } from "@/lib/cdn";
+import { FavoriteRow, fetchAlbumFavorites } from "@/lib/favorites";
+import { AlbumShare, listShares, shareStatus } from "@/lib/shares";
+import { ShareLinksList } from "@/components/album/ShareLinksList";
+import { AlbumFavoritesPanel } from "./AlbumFavoritesPanel";
+import { cn } from "@/lib/utils";
 
 interface Photo {
   id: string;
   url: string;
   thumbnail_url: string | null;
   preview_url?: string | null;
+  original_filename?: string | null;
   title: string | null;
   sort_order: number | null;
   width: number | null;
@@ -36,6 +42,10 @@ export function PhotoUpload() {
   const [uploadProgress, setUploadProgress] = useState(0);
   const [draggedIndex, setDraggedIndex] = useState<number | null>(null);
   const [dragOverIndex, setDragOverIndex] = useState<number | null>(null);
+  const [view, setView] = useState<"photos" | "favorites" | "links">("photos");
+  const [favorites, setFavorites] = useState<FavoriteRow[]>([]);
+  const [shares, setShares] = useState<AlbumShare[]>([]);
+  const [clientNames, setClientNames] = useState<Record<string, string>>({});
 
   const { toast } = useToast();
 
@@ -76,6 +86,48 @@ export function PhotoUpload() {
     }
   };
 
+  // Client favorites + share links for this album (read-only for the admin,
+  // except revoking links). Failures here never block managing photos.
+  const loadClientActivity = useCallback(async () => {
+    if (!albumId) return;
+    const [favResult, shareResult] = await Promise.allSettled([
+      fetchAlbumFavorites(albumId),
+      listShares(albumId),
+    ]);
+    const favRows = favResult.status === "fulfilled" ? favResult.value : [];
+    const shareRows = shareResult.status === "fulfilled" ? shareResult.value : [];
+    if (favResult.status === "rejected") console.error("Error loading favorites:", favResult.reason);
+    if (shareResult.status === "rejected") console.error("Error loading share links:", shareResult.reason);
+    setFavorites(favRows);
+    setShares(shareRows);
+
+    const userIds = [...new Set([...favRows.map((f) => f.user_id), ...shareRows.map((s) => s.created_by)])];
+    if (userIds.length > 0) {
+      const { data } = await supabase
+        .from("profiles")
+        .select("user_id, full_name, username")
+        .in("user_id", userIds);
+      const names: Record<string, string> = {};
+      data?.forEach((p) => {
+        names[p.user_id] = p.full_name || p.username || "Client";
+      });
+      setClientNames(names);
+    }
+  }, [albumId]);
+
+  useEffect(() => {
+    loadClientActivity();
+  }, [loadClientActivity]);
+
+  // photo id -> number of clients who hearted it
+  const favoriteCounts = useMemo(() => {
+    const counts = new Map<string, number>();
+    favorites.forEach((f) => counts.set(f.photo_id, (counts.get(f.photo_id) ?? 0) + 1));
+    return counts;
+  }, [favorites]);
+
+  const activeShareCount = shares.filter((sh) => shareStatus(sh) === "active").length;
+
   const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const files = e.target.files;
     if (!files || files.length === 0 || !albumId) return;
@@ -95,17 +147,24 @@ export function PhotoUpload() {
 
         // thumbnail_url / preview_url are null only if no variants could be
         // made — grids then show a placeholder instead of loading full-res.
-        const { error: insertError } = await supabase
+        const row = {
+          album_id: albumId,
+          url: processed.url,
+          thumbnail_url: processed.thumbnail_url,
+          preview_url: processed.preview_url,
+          sort_order: photos.length + uploadedCount,
+          width: processed.width,
+          height: processed.height,
+        };
+        // Keep the camera/Lightroom file name so client favorites can be
+        // matched to the originals. If the database hasn't been migrated yet
+        // (no original_filename column), retry without it so uploads never break.
+        let { error: insertError } = await supabase
           .from('photos')
-          .insert({
-            album_id: albumId,
-            url: processed.url,
-            thumbnail_url: processed.thumbnail_url,
-            preview_url: processed.preview_url,
-            sort_order: photos.length + uploadedCount,
-            width: processed.width,
-            height: processed.height,
-          });
+          .insert({ ...row, original_filename: file.name });
+        if (insertError && /original_filename/.test(insertError.message || "")) {
+          ({ error: insertError } = await supabase.from('photos').insert(row));
+        }
 
         if (insertError) throw insertError;
 
@@ -129,7 +188,7 @@ export function PhotoUpload() {
       }
 
       fetchAlbumAndPhotos();
-    } catch (error: any) {
+    } catch (error) {
       console.error('Error uploading photos:', error);
       toast({
         title: "Upload failed",
@@ -337,6 +396,16 @@ export function PhotoUpload() {
           </div>
         )}
 
+        {favoriteCounts.has(customPhoto.photoId) && (
+          <div
+            className="absolute bottom-2 left-2 z-[1] flex items-center gap-1 rounded-full bg-background/90 backdrop-blur-sm px-2 py-1 text-xs font-medium text-primary shadow-sm"
+            title="Hearted by the client"
+          >
+            <Heart className="w-3.5 h-3.5" fill="currentColor" />
+            {favoriteCounts.get(customPhoto.photoId)! > 1 && favoriteCounts.get(customPhoto.photoId)}
+          </div>
+        )}
+
         <div className="absolute inset-0 bg-black/50 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center gap-2">
           <Button
             size="sm"
@@ -398,7 +467,9 @@ export function PhotoUpload() {
           </Link>
           <div>
             <h2 className="text-2xl font-serif font-medium">{album.title}</h2>
-            <p className="text-muted-foreground">{photos.length} photos • Drag to reorder</p>
+            <p className="text-muted-foreground">
+              {photos.length} photos • {favoriteCounts.size} hearted • Drag to reorder
+            </p>
           </div>
         </div>
 
@@ -426,7 +497,51 @@ export function PhotoUpload() {
         </div>
       </div>
 
-      {photos.length === 0 ? (
+      <div className="flex gap-1 border-b border-border/60" role="tablist">
+        {([
+          ["photos", `Photos (${photos.length})`],
+          ["favorites", `Client favorites (${favoriteCounts.size})`],
+          ["links", `Share links (${activeShareCount} active)`],
+        ] as const).map(([key, label]) => (
+          <button
+            key={key}
+            type="button"
+            role="tab"
+            aria-selected={view === key}
+            onClick={() => {
+              setView(key);
+              if (key !== "photos") loadClientActivity();
+            }}
+            className={cn(
+              "px-4 py-2 text-sm -mb-px border-b-2 transition-colors inline-flex items-center gap-1.5",
+              view === key
+                ? "border-primary text-foreground"
+                : "border-transparent text-muted-foreground hover:text-foreground",
+            )}
+          >
+            {key === "favorites" && <Heart className="w-3.5 h-3.5 text-primary" fill="currentColor" />}
+            {label}
+          </button>
+        ))}
+      </div>
+
+      {view === "favorites" ? (
+        <AlbumFavoritesPanel
+          albumTitle={album.title}
+          photos={photos}
+          favorites={favorites}
+          clientNames={clientNames}
+        />
+      ) : view === "links" ? (
+        <div className="bg-card border border-border/50 rounded-lg px-4">
+          <ShareLinksList
+            shares={shares}
+            onChanged={loadClientActivity}
+            creatorNames={clientNames}
+            emptyText="Your client hasn't shared this album yet."
+          />
+        </div>
+      ) : photos.length === 0 ? (
         <div className="text-center py-16 bg-muted/30 rounded-lg border border-dashed border-border">
           <Upload className="w-12 h-12 text-muted-foreground/50 mx-auto mb-4" />
           <p className="text-muted-foreground mb-4">No photos in this album yet</p>

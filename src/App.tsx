@@ -14,6 +14,7 @@ import ResetPassword from "./pages/ResetPassword";
 import Admin from "./pages/Admin";
 import MyAlbum from "./pages/MyAlbum";
 import SharedAlbum from "./pages/SharedAlbum";
+import PublicShare from "./pages/PublicShare";
 import NotFound from "./pages/NotFound";
 import { PhotoUpload } from "./pages/admin/PhotoUpload";
 import SetupAdmin from "./pages/SetupAdmin";
@@ -57,6 +58,7 @@ const App = () => (
           <Route path="/admin/album/:albumId" element={<PhotoUpload />} />
           <Route path="/my-album" element={<MyAlbum />} />
           <Route path="/shared/:token" element={<SharedAlbum />} />
+          <Route path="/s/:token" element={<PublicShare />} />
           <Route path="*" element={<NotFound />} />
         </Routes>
       </BrowserRouter>

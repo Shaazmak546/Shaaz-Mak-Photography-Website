@@ -1,6 +1,6 @@
-import { useState, useEffect, useRef } from "react";
+import { useState, useEffect, useRef, useCallback, useMemo } from "react";
 import { useNavigate } from "react-router-dom";
-import { Download, LogOut, Loader2, X } from "lucide-react";
+import { Download, LogOut, Loader2, X, Heart, Share2 } from "lucide-react";
 import { RowsPhotoAlbum } from "react-photo-album";
 import "react-photo-album/rows.css";
 import { Button } from "@/components/ui/button";
@@ -12,6 +12,11 @@ import { Lightbox } from "@/components/portfolio/Lightbox";
 import { downloadAlbumAsZip, DownloadProgress } from "@/lib/downloadHelper";
 import { lightboxSrc, measureSrc, toGridPhoto } from "@/lib/photoUrls";
 import { renderAlbumImage } from "@/components/album/renderAlbumImage";
+import { makePhotoOverlay } from "@/components/album/photoOverlay";
+import { ShareDialog } from "@/components/album/ShareDialog";
+import { addFavorite, fetchAlbumFavorites, removeFavorite } from "@/lib/favorites";
+import { AlbumShare, ShareMode, listShares } from "@/lib/shares";
+import { cn } from "@/lib/utils";
 
 interface Photo {
   id: string;
@@ -43,6 +48,15 @@ export default function MyAlbum() {
   const [downloadProgress, setDownloadProgress] = useState<string>("");
   const [downloadingPhotoId, setDownloadingPhotoId] = useState<string | null>(null);
   const abortControllerRef = useRef<AbortController | null>(null);
+  // Favorites (hearts) for the selected album, and the "Favorites only" filter.
+  const [favoriteIds, setFavoriteIds] = useState<Set<string>>(new Set());
+  const [showFavoritesOnly, setShowFavoritesOnly] = useState(false);
+  // Share links: dialog + "Choose photos" selection mode.
+  const [shareOpen, setShareOpen] = useState(false);
+  const [shareInitialMode, setShareInitialMode] = useState<ShareMode | null>(null);
+  const [shares, setShares] = useState<AlbumShare[]>([]);
+  const [selectMode, setSelectMode] = useState(false);
+  const [selectedForShare, setSelectedForShare] = useState<Set<string>>(new Set());
 
   const navigate = useNavigate();
   const { toast } = useToast();
@@ -101,6 +115,97 @@ export default function MyAlbum() {
     fetchPhotos(album.id);
   };
 
+  const selectedAlbumId = selectedAlbum?.id;
+
+  const loadShares = useCallback(async () => {
+    if (!selectedAlbumId) return;
+    try {
+      setShares(await listShares(selectedAlbumId));
+    } catch (error) {
+      // Feature not available yet (e.g. database not migrated) — keep the album usable.
+      console.error("Error loading share links:", error);
+      setShares([]);
+    }
+  }, [selectedAlbumId]);
+
+  // Reset per-album UI state and load this album's hearts + share links.
+  useEffect(() => {
+    setFavoriteIds(new Set());
+    setShowFavoritesOnly(false);
+    setSelectMode(false);
+    setSelectedForShare(new Set());
+    setShares([]);
+    if (!selectedAlbumId || !user) return;
+    let cancelled = false;
+    fetchAlbumFavorites(selectedAlbumId, user.id)
+      .then((rows) => {
+        if (!cancelled) setFavoriteIds(new Set(rows.map((r) => r.photo_id)));
+      })
+      .catch((error) => console.error("Error loading favorites:", error));
+    loadShares();
+    return () => {
+      cancelled = true;
+    };
+  }, [selectedAlbumId, user, loadShares]);
+
+  const toggleFavorite = useCallback(
+    async (photoId: string) => {
+      if (!user || !selectedAlbumId) return;
+      const wasFavorite = favoriteIds.has(photoId);
+      const apply = (fav: boolean) =>
+        setFavoriteIds((prev) => {
+          const next = new Set(prev);
+          if (fav) next.add(photoId);
+          else next.delete(photoId);
+          return next;
+        });
+      apply(!wasFavorite); // optimistic
+      try {
+        if (wasFavorite) await removeFavorite(user.id, photoId);
+        else await addFavorite(user.id, selectedAlbumId, photoId);
+      } catch (error) {
+        console.error("Error updating favorite:", error);
+        apply(wasFavorite);
+        toast({ title: "Couldn't save your favorite", description: "Please try again.", variant: "destructive" });
+      }
+    },
+    [user, selectedAlbumId, favoriteIds, toast],
+  );
+
+  const toggleSelected = useCallback((photoId: string) => {
+    setSelectedForShare((prev) => {
+      const next = new Set(prev);
+      if (next.has(photoId)) next.delete(photoId);
+      else next.add(photoId);
+      return next;
+    });
+  }, []);
+
+  // "Choose photos": start from the current pick, or from their favorites.
+  const startChoosingPhotos = () => {
+    setShareOpen(false);
+    setSelectedIndex(null);
+    if (selectedForShare.size === 0 && favoriteIds.size > 0) {
+      setSelectedForShare(new Set(favoriteIds));
+    }
+    setSelectMode(true);
+  };
+
+  const finishChoosingPhotos = () => {
+    setShareInitialMode("selection");
+    setShareOpen(true);
+  };
+
+  const cancelChoosingPhotos = () => {
+    setSelectMode(false);
+    setSelectedForShare(new Set());
+  };
+
+  const openShareDialog = () => {
+    setShareInitialMode(null);
+    setShareOpen(true);
+  };
+
   const handleSignOut = async () => {
     await signOut();
     navigate("/");
@@ -157,7 +262,7 @@ export default function MyAlbum() {
       );
 
       toast({ title: "Download complete", description: "Your ZIP file has been downloaded." });
-    } catch (error: any) {
+    } catch (error) {
       if (error.message === 'Download cancelled') {
         toast({ title: "Download cancelled" });
       } else {
@@ -204,11 +309,38 @@ export default function MyAlbum() {
     });
   }, [photos]);
 
+  // What the grid + lightbox show: everything, or just the client's hearts.
+  const displayedPhotos = useMemo(
+    () => (showFavoritesOnly ? photos.filter((p) => favoriteIds.has(p.id)) : photos),
+    [photos, showFavoritesOnly, favoriteIds],
+  );
+
+  // Un-hearting the last photo while filtered can shrink the list under the lightbox.
+  useEffect(() => {
+    if (selectedIndex !== null && selectedIndex >= displayedPhotos.length) {
+      setSelectedIndex(displayedPhotos.length > 0 ? displayedPhotos.length - 1 : null);
+    }
+  }, [selectedIndex, displayedPhotos.length]);
+
+  const favoriteCount = useMemo(
+    () => photos.reduce((n, p) => n + (favoriteIds.has(p.id) ? 1 : 0), 0),
+    [photos, favoriteIds],
+  );
+
   // Grid: real thumbnails (+ srcSet) only. Never load the download original here.
-  const albumPhotos = photos.map((img) => toGridPhoto(img, measuredDims[img.id]));
+  const albumPhotos = displayedPhotos.map((img) => toGridPhoto(img, measuredDims[img.id]));
+
+  const photoOverlay = makePhotoOverlay({
+    favorites: favoriteIds,
+    onToggleFavorite: toggleFavorite,
+    selectMode,
+    selected: selectedForShare,
+    onToggleSelect: toggleSelected,
+    onOpen: (index) => setSelectedIndex(index),
+  });
 
   // Lightbox: preview → thumb → original (last resort when opened). Downloads still use `url`.
-  const lightboxImages = photos.map((p) => ({
+  const lightboxImages = displayedPhotos.map((p) => ({
     src: lightboxSrc(p),
     alt: p.title || "Photo",
   }));
@@ -335,6 +467,14 @@ export default function MyAlbum() {
                               </Button>
                             )}
                           </div>
+                          <Button
+                            variant="outline"
+                            onClick={openShareDialog}
+                            className="border-primary/40 w-full sm:w-auto"
+                          >
+                            <Share2 className="w-4 h-4 mr-2" />
+                            Share
+                          </Button>
                           {downloadProgress && (
                             <p className="text-sm text-muted-foreground animate-pulse">
                               {downloadProgress}
@@ -342,7 +482,92 @@ export default function MyAlbum() {
                           )}
                         </div>
                       )}
+                      {photos.length > 0 && (
+                        <div className="flex items-center gap-1 text-sm" role="tablist" aria-label="Filter photos">
+                          <button
+                            type="button"
+                            role="tab"
+                            aria-selected={!showFavoritesOnly}
+                            onClick={() => setShowFavoritesOnly(false)}
+                            className={cn(
+                              "px-3 py-1.5 border-b-2 transition-colors",
+                              !showFavoritesOnly
+                                ? "border-primary text-foreground"
+                                : "border-transparent text-muted-foreground hover:text-foreground",
+                            )}
+                          >
+                            All photos ({photos.length})
+                          </button>
+                          <button
+                            type="button"
+                            role="tab"
+                            aria-selected={showFavoritesOnly}
+                            onClick={() => setShowFavoritesOnly(true)}
+                            className={cn(
+                              "px-3 py-1.5 border-b-2 transition-colors inline-flex items-center gap-1.5",
+                              showFavoritesOnly
+                                ? "border-primary text-foreground"
+                                : "border-transparent text-muted-foreground hover:text-foreground",
+                            )}
+                          >
+                            <Heart
+                              className="w-3.5 h-3.5 text-primary"
+                              fill={favoriteCount > 0 ? "currentColor" : "none"}
+                            />
+                            Favorites ({favoriteCount})
+                          </button>
+                        </div>
+                      )}
                     </div>
+
+                    {selectMode && (
+                      <div className="sticky top-20 z-30 mb-4 flex flex-wrap items-center gap-2 border border-primary/30 bg-background/95 backdrop-blur-sm px-4 py-3 shadow-sm">
+                        <div className="mr-auto">
+                          <p className="font-medium">
+                            {selectedForShare.size} photo{selectedForShare.size === 1 ? "" : "s"} selected
+                          </p>
+                          <p className="text-xs text-muted-foreground">Tap photos to add or remove them from your link.</p>
+                        </div>
+                        {favoriteCount > 0 && (
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            onClick={() =>
+                              setSelectedForShare((prev) => new Set([...prev, ...favoriteIds]))
+                            }
+                          >
+                            <Heart className="w-4 h-4 mr-1.5 text-primary" fill="currentColor" />
+                            Select my favorites
+                          </Button>
+                        )}
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          onClick={() => setSelectedForShare(new Set(displayedPhotos.map((p) => p.id)))}
+                        >
+                          Select all
+                        </Button>
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          onClick={() => setSelectedForShare(new Set())}
+                          disabled={selectedForShare.size === 0}
+                        >
+                          Clear
+                        </Button>
+                        <Button variant="outline" size="sm" onClick={cancelChoosingPhotos}>
+                          Cancel
+                        </Button>
+                        <Button
+                          size="sm"
+                          onClick={finishChoosingPhotos}
+                          disabled={selectedForShare.size === 0}
+                          className="bg-primary text-primary-foreground hover:bg-primary/90"
+                        >
+                          Continue
+                        </Button>
+                      </div>
+                    )}
 
                     {photos.length === 0 ? (
                       <div className="text-center py-12 bg-muted/30 border border-border/50">
@@ -352,16 +577,27 @@ export default function MyAlbum() {
                             : "Photos coming soon!"}
                         </p>
                       </div>
+                    ) : displayedPhotos.length === 0 ? (
+                      <div className="text-center py-16 bg-muted/30 border border-border/50">
+                        <Heart className="w-8 h-8 text-primary/60 mx-auto mb-3" />
+                        <p className="font-serif text-xl mb-1">No favorites yet</p>
+                        <p className="text-muted-foreground text-sm">
+                          Tap the heart on any photo to save it here.
+                        </p>
+                        <Button variant="link" className="mt-2 text-primary" onClick={() => setShowFavoritesOnly(false)}>
+                          View all photos
+                        </Button>
+                      </div>
                     ) : (
                       <RowsPhotoAlbum
                         photos={albumPhotos}
                         targetRowHeight={300}
                         rowConstraints={{ minPhotos: 1, maxPhotos: 4 }}
                         spacing={8}
-                        onClick={({ index }) => setSelectedIndex(index)}
-                        render={{ image: renderAlbumImage }}
+                        render={{ image: renderAlbumImage, extras: photoOverlay }}
                         componentsProps={{
                           container: { className: "cursor-pointer" },
+                          wrapper: { className: "group" },
                         }}
                         sizes={{
                           size: "900px",
@@ -401,20 +637,45 @@ export default function MyAlbum() {
             className="absolute top-6 right-20 text-foreground hover:text-primary transition-colors z-10 p-2"
             onClick={(e) => {
               e.stopPropagation();
-              handleDownloadPhoto(photos[selectedIndex]);
+              handleDownloadPhoto(displayedPhotos[selectedIndex]);
             }}
-            disabled={downloadingPhotoId === photos[selectedIndex]?.id}
+            disabled={downloadingPhotoId === displayedPhotos[selectedIndex]?.id}
           >
-            {downloadingPhotoId === photos[selectedIndex]?.id ? (
+            {downloadingPhotoId === displayedPhotos[selectedIndex]?.id ? (
               <Loader2 className="w-6 h-6 animate-spin" />
             ) : (
               <Download className="w-6 h-6" />
             )}
           </button>
 
+          {/* Favorite (heart) button */}
+          {displayedPhotos[selectedIndex] && (
+            <button
+              className={cn(
+                "absolute top-6 right-32 transition-colors z-10 p-2",
+                favoriteIds.has(displayedPhotos[selectedIndex].id)
+                  ? "text-primary hover:text-accent"
+                  : "text-foreground hover:text-primary",
+              )}
+              aria-label={
+                favoriteIds.has(displayedPhotos[selectedIndex].id) ? "Remove from favorites" : "Add to favorites"
+              }
+              aria-pressed={favoriteIds.has(displayedPhotos[selectedIndex].id)}
+              onClick={(e) => {
+                e.stopPropagation();
+                toggleFavorite(displayedPhotos[selectedIndex].id);
+              }}
+            >
+              <Heart
+                className="w-6 h-6"
+                fill={favoriteIds.has(displayedPhotos[selectedIndex].id) ? "currentColor" : "none"}
+              />
+            </button>
+          )}
+
           {/* Image counter */}
           <div className="absolute top-6 left-6 text-foreground/70 text-sm font-medium">
-            {selectedIndex + 1} / {photos.length}
+            {selectedIndex + 1} / {displayedPhotos.length}
           </div>
 
           {/* Previous button */}
@@ -433,7 +694,7 @@ export default function MyAlbum() {
           )}
 
           {/* Next button */}
-          {selectedIndex < photos.length - 1 && (
+          {selectedIndex < displayedPhotos.length - 1 && (
             <button
               className="absolute right-4 top-1/2 -translate-y-1/2 p-2 text-foreground/70 hover:text-foreground bg-background/50 hover:bg-background/80 rounded-full transition-all z-10"
               onClick={(e) => {
@@ -455,6 +716,26 @@ export default function MyAlbum() {
             onClick={(e) => e.stopPropagation()}
           />
         </div>
+      )}
+
+      {selectedAlbum && (
+        <ShareDialog
+          open={shareOpen}
+          onOpenChange={setShareOpen}
+          albumId={selectedAlbum.id}
+          albumTitle={selectedAlbum.title}
+          totalPhotos={photos.length}
+          favoriteCount={favoriteCount}
+          selectedIds={[...selectedForShare]}
+          initialMode={shareInitialMode}
+          onChooseSelection={startChoosingPhotos}
+          shares={shares}
+          onSharesChanged={loadShares}
+          onCreated={() => {
+            setSelectMode(false);
+            setSelectedForShare(new Set());
+          }}
+        />
       )}
     </Layout>
   );

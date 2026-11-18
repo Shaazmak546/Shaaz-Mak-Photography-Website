@@ -1,6 +1,6 @@
 import { useState, useEffect } from "react";
 import { Link } from "react-router-dom";
-import { Plus, ImageIcon, Calendar, User, ExternalLink, Trash2, Loader2, Pencil } from "lucide-react";
+import { Plus, ImageIcon, Calendar, User, ExternalLink, Trash2, Loader2, Pencil, Heart, Link2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -32,6 +32,8 @@ import {
 import { useToast } from "@/hooks/use-toast";
 import { supabase } from "@/integrations/supabase/client";
 import { cdn } from "@/lib/cdn";
+import { countAlbumFavorites } from "@/lib/favorites";
+import { countActiveShares } from "@/lib/shares";
 
 interface Album {
   id: string;
@@ -43,6 +45,8 @@ interface Album {
   created_at: string;
   client_name?: string;
   photo_count?: number;
+  favorite_count?: number;
+  active_share_count?: number;
 }
 
 interface Client {
@@ -116,6 +120,8 @@ export function AlbumManager({ onChange }: AlbumManagerProps = {}) {
       // Count per album with head-only count queries (a single select of all
       // photos is capped at 1000 rows by the API, which undercounted albums).
       const photoCounts: Record<string, number> = {};
+      const favoriteCounts: Record<string, number> = {};
+      const shareCounts: Record<string, number> = {};
       await Promise.all(
         (albumsData || []).map(async (album) => {
           const { count } = await supabase
@@ -123,6 +129,14 @@ export function AlbumManager({ onChange }: AlbumManagerProps = {}) {
             .select('id', { count: 'exact', head: true })
             .eq('album_id', album.id);
           photoCounts[album.id] = count ?? 0;
+          // Client favorites + active share links. Never block the album list
+          // if these lookups fail.
+          const [fav, links] = await Promise.allSettled([
+            countAlbumFavorites(album.id),
+            countActiveShares(album.id),
+          ]);
+          favoriteCounts[album.id] = fav.status === 'fulfilled' ? fav.value : 0;
+          shareCounts[album.id] = links.status === 'fulfilled' ? links.value : 0;
         })
       );
 
@@ -142,6 +156,8 @@ export function AlbumManager({ onChange }: AlbumManagerProps = {}) {
         ...album,
         client_name: clientNames[album.client_id] || 'Unknown',
         photo_count: photoCounts[album.id] || 0,
+        favorite_count: favoriteCounts[album.id] || 0,
+        active_share_count: shareCounts[album.id] || 0,
       })) || [];
 
       setAlbums(albumsWithData);
@@ -182,7 +198,7 @@ export function AlbumManager({ onChange }: AlbumManagerProps = {}) {
       setDialogOpen(false);
       fetchData();
       onChange?.();
-    } catch (error: any) {
+    } catch (error) {
       console.error('Error creating album:', error);
       toast({
         title: "Error",
@@ -281,7 +297,7 @@ export function AlbumManager({ onChange }: AlbumManagerProps = {}) {
       setAlbumToDelete(null);
       fetchData();
       onChange?.();
-    } catch (error: any) {
+    } catch (error) {
       console.error('Error deleting album:', error);
       toast({
         title: "Error",
@@ -327,7 +343,7 @@ export function AlbumManager({ onChange }: AlbumManagerProps = {}) {
       setEditingAlbum(null);
       fetchData();
       onChange?.();
-    } catch (err: any) {
+    } catch (err) {
       console.error("Error updating album:", err);
       toast({
         title: "Error",
@@ -482,8 +498,28 @@ export function AlbumManager({ onChange }: AlbumManagerProps = {}) {
                     <ImageIcon className="w-12 h-12 text-muted-foreground/30" />
                   </div>
                 )}
-                <div className="absolute top-3 right-3 bg-background/90 backdrop-blur-sm px-2 py-1 rounded text-xs font-medium">
-                  {album.photo_count} photos
+                <div className="absolute top-3 right-3 flex gap-1.5">
+                  {!!album.favorite_count && (
+                    <div
+                      className="bg-background/90 backdrop-blur-sm px-2 py-1 rounded text-xs font-medium text-primary inline-flex items-center gap-1"
+                      title="Photos hearted by the client"
+                    >
+                      <Heart className="w-3 h-3" fill="currentColor" />
+                      {album.favorite_count}
+                    </div>
+                  )}
+                  {!!album.active_share_count && (
+                    <div
+                      className="bg-background/90 backdrop-blur-sm px-2 py-1 rounded text-xs font-medium inline-flex items-center gap-1"
+                      title="Active share links"
+                    >
+                      <Link2 className="w-3 h-3" />
+                      {album.active_share_count}
+                    </div>
+                  )}
+                  <div className="bg-background/90 backdrop-blur-sm px-2 py-1 rounded text-xs font-medium">
+                    {album.photo_count} photos
+                  </div>
                 </div>
               </div>
               <div className="p-4">
