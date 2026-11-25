@@ -122,6 +122,7 @@ export interface SharedPhoto {
   thumbnail_url: string | null;
   preview_url: string | null;
   url: string | null; // only present when the link allows downloads
+  original_filename?: string | null; // present once the share RPC includes it
   width: number | null;
   height: number | null;
 }

@@ -1,13 +1,13 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { Link, useParams } from "react-router-dom";
-import { Camera, ChevronLeft, ChevronRight, Clock, Download, Link2Off, Loader2, X } from "lucide-react";
+import { Camera, ChevronLeft, ChevronRight, Clock, Link2Off, X } from "lucide-react";
 import { RowsPhotoAlbum } from "react-photo-album";
 import "react-photo-album/rows.css";
 import { Button } from "@/components/ui/button";
-import { useToast } from "@/hooks/use-toast";
 import { renderAlbumImage } from "@/components/album/renderAlbumImage";
 import { cdn } from "@/lib/cdn";
 import ZipDownload from "@/components/album/ZipDownload";
+import { SavePhotoButton } from "@/components/album/SavePhotoButton";
 import { measureSrc, toGridPhoto } from "@/lib/photoUrls";
 import { SharedAlbumResult, SharedPhoto, fetchSharedAlbum, formatShareDate } from "@/lib/shares";
 
@@ -59,11 +59,9 @@ function useNoIndex(title: string) {
 
 export default function PublicShare() {
   const { token } = useParams<{ token: string }>();
-  const { toast } = useToast();
   const [state, setState] = useState<LoadState>({ kind: "loading" });
   const [lightboxIndex, setLightboxIndex] = useState<number | null>(null);
   const [measuredDims, setMeasuredDims] = useState<Record<string, { w: number; h: number }>>({});
-  const [downloadingOne, setDownloadingOne] = useState(false);
 
   const albumTitle = state.kind === "ok" ? state.data.album_title : "Shared photos";
   useNoIndex(`${albumTitle} · Shaaz Mak Photography`);
@@ -130,30 +128,6 @@ export default function PublicShare() {
   }, [lightboxIndex, goPrev, goNext]);
 
   const fileBase = albumTitle.replace(/[^a-zA-Z0-9-_]+/g, "_");
-
-  const downloadOne = async (photo: SharedPhoto, index: number) => {
-    if (!photo.url) return;
-    setDownloadingOne(true);
-    try {
-      const res = await fetch(cdn(photo.url));
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      const blob = await res.blob();
-      const href = URL.createObjectURL(blob);
-      const ext = photo.url.split(".").pop()?.split("?")[0] || "jpg";
-      const a = document.createElement("a");
-      a.href = href;
-      a.download = `${fileBase}_${String(index + 1).padStart(3, "0")}.${ext}`;
-      document.body.appendChild(a);
-      a.click();
-      document.body.removeChild(a);
-      URL.revokeObjectURL(href);
-    } catch (err) {
-      console.error("Download failed:", err);
-      toast({ title: "Download failed", description: "Please try again.", variant: "destructive" });
-    } finally {
-      setDownloadingOne(false);
-    }
-  };
 
   const header = (
     <header className="py-8 border-b border-border/60">
@@ -282,17 +256,15 @@ export default function PublicShare() {
             <X className="w-8 h-8" />
           </button>
           {allowDownload && current.url && (
-            <button
-              className="absolute top-6 right-20 text-foreground hover:text-primary transition-colors z-10 p-1"
-              onClick={(e) => {
-                e.stopPropagation();
-                downloadOne(current, lightboxIndex);
+            <SavePhotoButton
+              className="absolute top-6 right-20"
+              photo={{
+                id: current.id,
+                url: cdn(current.url),
+                original_filename: current.original_filename,
               }}
-              disabled={downloadingOne}
-              aria-label="Download photo"
-            >
-              {downloadingOne ? <Loader2 className="w-6 h-6 animate-spin" /> : <Download className="w-6 h-6" />}
-            </button>
+              fallbackFileName={`${fileBase}_${String(lightboxIndex + 1).padStart(3, "0")}.${current.url.split(".").pop()?.split("?")[0] || "jpg"}`}
+            />
           )}
           {lightboxIndex > 0 && (
             <button

@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback, useMemo } from "react";
 import { useNavigate } from "react-router-dom";
-import { Download, LogOut, Loader2, Heart, Share2 } from "lucide-react";
+import { LogOut, Heart, Share2 } from "lucide-react";
 import { RowsPhotoAlbum } from "react-photo-album";
 import "react-photo-album/rows.css";
 import { Button } from "@/components/ui/button";
@@ -10,7 +10,9 @@ import { useAuth } from "@/hooks/useAuth";
 import { Layout } from "@/components/layout/Layout";
 import { Lightbox } from "@/components/portfolio/Lightbox";
 import ZipDownload from "@/components/album/ZipDownload";
+import { cdn } from "@/lib/cdn";
 import { lightboxSrc, measureSrc, toGridPhoto } from "@/lib/photoUrls";
+import { SavePhotoButton } from "@/components/album/SavePhotoButton";
 import { renderAlbumImage } from "@/components/album/renderAlbumImage";
 import { makePhotoOverlay } from "@/components/album/photoOverlay";
 import { ShareDialog } from "@/components/album/ShareDialog";
@@ -23,6 +25,7 @@ interface Photo {
   url: string;
   thumbnail_url: string | null;
   preview_url?: string | null;
+  original_filename?: string | null;
   title: string | null;
   sort_order: number | null;
   width: number | null;
@@ -44,7 +47,6 @@ export default function MyAlbum() {
   const [photos, setPhotos] = useState<Photo[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [selectedIndex, setSelectedIndex] = useState<number | null>(null);
-  const [downloadingPhotoId, setDownloadingPhotoId] = useState<string | null>(null);
   // Favorites (hearts) for the selected album, and the "Favorites only" filter.
   const [favoriteIds, setFavoriteIds] = useState<Set<string>>(new Set());
   const [showFavoritesOnly, setShowFavoritesOnly] = useState(false);
@@ -206,29 +208,6 @@ export default function MyAlbum() {
   const handleSignOut = async () => {
     await signOut();
     navigate("/");
-  };
-
-  const handleDownloadPhoto = async (photo: Photo) => {
-    setDownloadingPhotoId(photo.id);
-    try {
-      const response = await fetch(photo.url);
-      const blob = await response.blob();
-      const url = window.URL.createObjectURL(blob);
-      const a = document.createElement('a');
-      a.href = url;
-      const extension = photo.url.split('.').pop()?.split('?')[0] || 'jpg';
-      a.download = photo.title ? `${photo.title}.${extension}` : `photo.${extension}`;
-      document.body.appendChild(a);
-      a.click();
-      document.body.removeChild(a);
-      window.URL.revokeObjectURL(url);
-      toast({ title: "Download started" });
-    } catch (error) {
-      console.error('Download error:', error);
-      toast({ title: "Download failed", variant: "destructive" });
-    } finally {
-      setDownloadingPhotoId(null);
-    }
   };
 
   const formatDate = (dateString: string | null) => {
@@ -554,21 +533,19 @@ export default function MyAlbum() {
             </svg>
           </button>
 
-          {/* Download button */}
-          <button
-            className="absolute top-6 right-20 text-foreground hover:text-primary transition-colors z-10 p-2"
-            onClick={(e) => {
-              e.stopPropagation();
-              handleDownloadPhoto(displayedPhotos[selectedIndex]);
-            }}
-            disabled={downloadingPhotoId === displayedPhotos[selectedIndex]?.id}
-          >
-            {downloadingPhotoId === displayedPhotos[selectedIndex]?.id ? (
-              <Loader2 className="w-6 h-6 animate-spin" />
-            ) : (
-              <Download className="w-6 h-6" />
-            )}
-          </button>
+          {/* Save / download the original (Share sheet on iPhone, file download elsewhere) */}
+          {displayedPhotos[selectedIndex] && (
+            <SavePhotoButton
+              className="absolute top-6 right-20"
+              photo={{
+                id: displayedPhotos[selectedIndex].id,
+                url: cdn(displayedPhotos[selectedIndex].url),
+                original_filename: displayedPhotos[selectedIndex].original_filename,
+                title: displayedPhotos[selectedIndex].title,
+              }}
+              announceDownload
+            />
+          )}
 
           {/* Favorite (heart) button */}
           {displayedPhotos[selectedIndex] && (
