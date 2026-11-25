@@ -1,4 +1,12 @@
 import { ZipWriter } from "./zipWriter";
+import {
+  CANCELLED_MESSAGE,
+  ServiceWorkerUnavailableError,
+  downloadZipViaServiceWorker,
+  serviceWorkerZipSupported,
+} from "./zipServiceWorker";
+
+export { CANCELLED_MESSAGE, prepareZipServiceWorker } from "./zipServiceWorker";
 
 export interface DownloadPhoto {
   url: string;
@@ -20,10 +28,8 @@ export interface DownloadResult {
   failed: string[];
 }
 
-export const CANCELLED_MESSAGE = "Download cancelled";
-
-/** Photos per ZIP when the browser can't stream to disk (kept modest so memory stays low). */
-export const PART_SIZE = 50;
+/** Largest album we will build in page memory when no streaming method is available. */
+const IN_MEMORY_MAX_PHOTOS = 150;
 
 const CONCURRENCY = 4; // photos fetched ahead while the previous one is written
 const FETCH_ATTEMPTS = 4;
@@ -58,15 +64,6 @@ export function canStreamToDisk(): boolean {
   return getSaveFilePicker() !== null;
 }
 
-export function partCount(totalPhotos: number): number {
-  return Math.max(1, Math.ceil(totalPhotos / PART_SIZE));
-}
-
-export function partRange(totalPhotos: number, partIndex: number): { start: number; end: number } {
-  const start = partIndex * PART_SIZE;
-  return { start, end: Math.min(totalPhotos, start + PART_SIZE) };
-}
-
 function safeName(text: string): string {
   return text.replace(/[^a-zA-Z0-9-_]/g, "_") || "album";
 }
@@ -77,8 +74,8 @@ function extensionOf(url: string): string {
 }
 
 /**
- * One stable file name per photo, based on its position in the whole album, so a
- * part never renames photos and two photos never collide inside a ZIP.
+ * One file name per photo, based on its position in the album, so two photos
+ * never collide inside the ZIP.
  */
 export function fileNamesFor(photos: DownloadPhoto[]): string[] {
   const used = new Set<string>();
@@ -242,28 +239,52 @@ export async function downloadAlbumToDisk(
   }
 }
 
-/**
- * Any browser: one part of the album (PART_SIZE photos) as its own ZIP, e.g.
- * `Mendhi_part_03_of_11.zip`. Small enough to build in memory, including on Safari.
- */
-export async function downloadAlbumPart(
+/** Last resort for small albums: build the ZIP in page memory, then save it. */
+async function downloadInMemory(
   photos: DownloadPhoto[],
   albumTitle: string,
-  partIndex: number,
   onProgress?: ProgressCallback,
   signal?: AbortSignal,
 ): Promise<DownloadResult> {
-  const parts = partCount(photos.length);
-  const { start, end } = partRange(photos.length, partIndex);
-  const names = fileNamesFor(photos).slice(start, end);
   const chunks: Uint8Array[] = [];
   const writer = new ZipWriter((chunk) => {
     chunks.push(chunk);
   });
-  const result = await writeZip(photos.slice(start, end), names, writer, onProgress, signal);
-  const suffix =
-    parts === 1 ? "" : `_part_${String(partIndex + 1).padStart(2, "0")}_of_${String(parts).padStart(2, "0")}`;
-  triggerBrowserDownload(new Blob(chunks as BlobPart[], { type: "application/zip" }), `${safeName(albumTitle)}${suffix}.zip`);
-  onProgress?.({ current: end - start, total: end - start, phase: "complete" });
+  const result = await writeZip(photos, fileNamesFor(photos), writer, onProgress, signal);
+  triggerBrowserDownload(new Blob(chunks as BlobPart[], { type: "application/zip" }), `${safeName(albumTitle)}.zip`);
+  onProgress?.({ current: photos.length, total: photos.length, phase: "complete" });
   return result;
+}
+
+/**
+ * Downloads the whole album as ONE ZIP of the originals.
+ *  1. Service worker stream (Chrome, Edge, Firefox, Safari): saved straight to Downloads, constant memory.
+ *  2. If that can't start: Chrome/Edge "Save as" stream, or for small albums an in-memory ZIP.
+ */
+export async function downloadAlbum(
+  photos: DownloadPhoto[],
+  albumTitle: string,
+  onProgress?: ProgressCallback,
+  signal?: AbortSignal,
+): Promise<DownloadResult> {
+  const names = fileNamesFor(photos);
+  if (serviceWorkerZipSupported()) {
+    try {
+      return await downloadZipViaServiceWorker(
+        photos.map((p, i) => ({ url: p.url, name: names[i] })),
+        `${safeName(albumTitle)}.zip`,
+        onProgress,
+        signal,
+      );
+    } catch (error) {
+      if (!(error instanceof ServiceWorkerUnavailableError)) throw error;
+      console.warn("Streaming download unavailable, falling back:", error.message);
+    }
+  }
+  if (photos.length <= IN_MEMORY_MAX_PHOTOS) return downloadInMemory(photos, albumTitle, onProgress, signal);
+  if (canStreamToDisk()) return downloadAlbumToDisk(photos, albumTitle, onProgress, signal);
+  throw new Error(
+    "This browser is blocking large downloads from this page (this can happen in a private window). " +
+      "Please open the album in a normal browser window and try again.",
+  );
 }
