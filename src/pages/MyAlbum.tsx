@@ -1,6 +1,6 @@
-import { useState, useEffect, useRef, useCallback, useMemo } from "react";
+import { useState, useEffect, useCallback, useMemo } from "react";
 import { useNavigate } from "react-router-dom";
-import { Download, LogOut, Loader2, X, Heart, Share2 } from "lucide-react";
+import { Download, LogOut, Loader2, Heart, Share2 } from "lucide-react";
 import { RowsPhotoAlbum } from "react-photo-album";
 import "react-photo-album/rows.css";
 import { Button } from "@/components/ui/button";
@@ -9,7 +9,7 @@ import { supabase } from "@/integrations/supabase/client";
 import { useAuth } from "@/hooks/useAuth";
 import { Layout } from "@/components/layout/Layout";
 import { Lightbox } from "@/components/portfolio/Lightbox";
-import { downloadAlbumAsZip, DownloadProgress } from "@/lib/downloadHelper";
+import ZipDownload from "@/components/album/ZipDownload";
 import { lightboxSrc, measureSrc, toGridPhoto } from "@/lib/photoUrls";
 import { renderAlbumImage } from "@/components/album/renderAlbumImage";
 import { makePhotoOverlay } from "@/components/album/photoOverlay";
@@ -44,10 +44,7 @@ export default function MyAlbum() {
   const [photos, setPhotos] = useState<Photo[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [selectedIndex, setSelectedIndex] = useState<number | null>(null);
-  const [isDownloading, setIsDownloading] = useState(false);
-  const [downloadProgress, setDownloadProgress] = useState<string>("");
   const [downloadingPhotoId, setDownloadingPhotoId] = useState<string | null>(null);
-  const abortControllerRef = useRef<AbortController | null>(null);
   // Favorites (hearts) for the selected album, and the "Favorites only" filter.
   const [favoriteIds, setFavoriteIds] = useState<Set<string>>(new Set());
   const [showFavoritesOnly, setShowFavoritesOnly] = useState(false);
@@ -234,56 +231,6 @@ export default function MyAlbum() {
     }
   };
 
-  const handleDownloadAll = async () => {
-    if (!selectedAlbum || photos.length === 0) return;
-    
-    setIsDownloading(true);
-    setDownloadProgress("Preparing download...");
-    abortControllerRef.current = new AbortController();
-
-    try {
-      const downloadPhotos = photos.map(p => ({
-        url: p.url,
-        title: p.title
-      }));
-
-      await downloadAlbumAsZip(
-        downloadPhotos,
-        selectedAlbum.title,
-        (progress: DownloadProgress) => {
-          if (progress.phase === 'downloading') {
-            const percent = Math.round((progress.current / progress.total) * 100);
-            setDownloadProgress(`Downloading ${progress.current} of ${progress.total} photos (${percent}%)`);
-          } else if (progress.phase === 'creating') {
-            setDownloadProgress("Creating ZIP file...");
-          }
-        },
-        abortControllerRef.current.signal
-      );
-
-      toast({ title: "Download complete", description: "Your ZIP file has been downloaded." });
-    } catch (error) {
-      if (error.message === 'Download cancelled') {
-        toast({ title: "Download cancelled" });
-      } else {
-        console.error('ZIP download error:', error);
-        toast({ 
-          title: "Download failed", 
-          description: error.message || "Failed to download album", 
-          variant: "destructive" 
-        });
-      }
-    } finally {
-      setIsDownloading(false);
-      setDownloadProgress("");
-      abortControllerRef.current = null;
-    }
-  };
-
-  const handleCancelDownload = () => {
-    abortControllerRef.current?.abort();
-  };
-
   const formatDate = (dateString: string | null) => {
     if (!dateString) return "";
     return new Date(dateString).toLocaleDateString('en-US', {
@@ -442,31 +389,11 @@ export default function MyAlbum() {
                         )}
                       </div>
                       {photos.length > 0 && (
-                        <div className="flex flex-col sm:flex-row sm:items-center gap-2">
-                          <div className="flex items-center gap-2">
-                            <Button
-                              onClick={handleDownloadAll}
-                              disabled={isDownloading}
-                              className="bg-primary text-primary-foreground hover:bg-primary/90 w-full sm:w-auto"
-                            >
-                              {isDownloading ? (
-                                <Loader2 className="w-4 h-4 mr-2 animate-spin" />
-                              ) : (
-                                <Download className="w-4 h-4 mr-2" />
-                              )}
-                              {isDownloading ? "Downloading..." : "Download All (ZIP)"}
-                            </Button>
-                            {isDownloading && (
-                              <Button
-                                variant="outline"
-                                size="icon"
-                                onClick={handleCancelDownload}
-                                className="border-destructive text-destructive hover:bg-destructive hover:text-destructive-foreground"
-                              >
-                                <X className="w-4 h-4" />
-                              </Button>
-                            )}
-                          </div>
+                        <div className="flex flex-col sm:flex-row sm:items-start gap-2">
+                          <ZipDownload
+                            photos={photos.map((p) => ({ url: p.url, title: p.title }))}
+                            albumTitle={selectedAlbum.title}
+                          />
                           <Button
                             variant="outline"
                             onClick={openShareDialog}
@@ -475,11 +402,6 @@ export default function MyAlbum() {
                             <Share2 className="w-4 h-4 mr-2" />
                             Share
                           </Button>
-                          {downloadProgress && (
-                            <p className="text-sm text-muted-foreground animate-pulse">
-                              {downloadProgress}
-                            </p>
-                          )}
                         </div>
                       )}
                       {photos.length > 0 && (

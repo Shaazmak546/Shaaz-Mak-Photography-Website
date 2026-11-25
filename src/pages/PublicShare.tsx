@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { Link, useParams } from "react-router-dom";
 import { Camera, ChevronLeft, ChevronRight, Clock, Download, Link2Off, Loader2, X } from "lucide-react";
 import { RowsPhotoAlbum } from "react-photo-album";
@@ -7,7 +7,7 @@ import { Button } from "@/components/ui/button";
 import { useToast } from "@/hooks/use-toast";
 import { renderAlbumImage } from "@/components/album/renderAlbumImage";
 import { cdn } from "@/lib/cdn";
-import { downloadAlbumAsZip } from "@/lib/downloadHelper";
+import ZipDownload from "@/components/album/ZipDownload";
 import { measureSrc, toGridPhoto } from "@/lib/photoUrls";
 import { SharedAlbumResult, SharedPhoto, fetchSharedAlbum, formatShareDate } from "@/lib/shares";
 
@@ -63,9 +63,7 @@ export default function PublicShare() {
   const [state, setState] = useState<LoadState>({ kind: "loading" });
   const [lightboxIndex, setLightboxIndex] = useState<number | null>(null);
   const [measuredDims, setMeasuredDims] = useState<Record<string, { w: number; h: number }>>({});
-  const [zipProgress, setZipProgress] = useState<string | null>(null);
   const [downloadingOne, setDownloadingOne] = useState(false);
-  const abortRef = useRef<AbortController | null>(null);
 
   const albumTitle = state.kind === "ok" ? state.data.album_title : "Shared photos";
   useNoIndex(`${albumTitle} · Shaaz Mak Photography`);
@@ -157,32 +155,6 @@ export default function PublicShare() {
     }
   };
 
-  const downloadAll = async () => {
-    const files = photos.filter((p) => p.url).map((p) => ({ url: cdn(p.url as string), title: null }));
-    if (files.length === 0) return;
-    abortRef.current = new AbortController();
-    setZipProgress("Preparing download...");
-    try {
-      await downloadAlbumAsZip(
-        files,
-        albumTitle,
-        (p) =>
-          setZipProgress(
-            p.phase === "downloading" ? `Downloading ${p.current} of ${p.total}...` : "Creating ZIP file...",
-          ),
-        abortRef.current.signal,
-      );
-    } catch (err) {
-      if (!(err instanceof Error && err.message === "Download cancelled")) {
-        console.error("ZIP download failed:", err);
-        toast({ title: "Download failed", description: "Please try again.", variant: "destructive" });
-      }
-    } finally {
-      setZipProgress(null);
-      abortRef.current = null;
-    }
-  };
-
   const header = (
     <header className="py-8 border-b border-border/60">
       <div className="container mx-auto px-6 text-center">
@@ -253,23 +225,12 @@ export default function PublicShare() {
             {data.expires_at && <> · available until {formatShareDate(data.expires_at)}</>}
           </p>
           {allowDownload && photos.length > 0 && (
-            <div className="mt-6 flex flex-col items-center gap-2">
-              <div className="flex gap-2">
-                <Button
-                  onClick={downloadAll}
-                  disabled={zipProgress !== null}
-                  className="bg-primary text-primary-foreground hover:bg-primary/90"
-                >
-                  {zipProgress ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <Download className="w-4 h-4 mr-2" />}
-                  {zipProgress ? "Downloading..." : "Download all (ZIP)"}
-                </Button>
-                {zipProgress && (
-                  <Button variant="outline" size="icon" onClick={() => abortRef.current?.abort()} aria-label="Cancel download">
-                    <X className="w-4 h-4" />
-                  </Button>
-                )}
-              </div>
-              {zipProgress && <p className="text-sm text-muted-foreground animate-pulse">{zipProgress}</p>}
+            <div className="mt-6 flex justify-center">
+              <ZipDownload
+                photos={photos.filter((p) => p.url).map((p) => ({ url: cdn(p.url as string), title: null }))}
+                albumTitle={albumTitle}
+                label="Download all (ZIP)"
+              />
             </div>
           )}
         </div>
